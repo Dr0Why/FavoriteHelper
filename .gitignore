@@ -1,0 +1,41 @@
+# Build and release output
+bin/
+obj/
+artifacts/
+**/bin/
+**/obj/
+*.pdb
+
+# Runtime and test output
+logs/
+*.log
+*.log.1
+TestResults/
+*.trx
+*smoke*.png
+*screenshot*.png
+
+# Local SDK and package caches
+.dotnet/
+.dotnet-home/
+.nuget/
+.nuget-packages/
+.appdata/
+
+# IDE and user-specific files
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Temporary and OS-generated files
+*.tmp
+*.temp
+*.bak
+*.swp
+*.DS_Store
+Thumbs.db
+Desktop.ini
