@@ -94,7 +94,7 @@ namespace FavoriteHelper
             }
             catch (Exception ex)
             {
-                if (log != null) log("COMMAND_FATAL", ex.GetType().Name + ": " + ex.Message);
+                if (log != null) log("COMMAND_FATAL", "error=" + ex.GetType().Name);
                 return InfrastructureFailureExitCode;
             }
         }
@@ -112,12 +112,12 @@ namespace FavoriteHelper
                         result.Status == ShortcutMigrationStatus.Refused ? RepairBatchStatus.Rejected : RepairBatchStatus.Failed;
                     results.Add(new RepairItemResult(path, status, result.Message));
                     if (status == RepairBatchStatus.Rejected || status == RepairBatchStatus.Failed)
-                        (log ?? delegate { })("COMMAND_ITEM_SAFETY", "mode=Repair status=" + status + " reason=" + result.Message);
+                        (log ?? delegate { })("COMMAND_ITEM_SAFETY", "mode=Repair status=" + status);
                 }
                 catch (Exception ex)
                 {
                     results.Add(new RepairItemResult(path, RepairBatchStatus.Failed, "repair failed: " + ex.Message));
-                    (log ?? delegate { })("COMMAND_ITEM_SAFETY", "mode=Repair status=Failed reason=" + ex.Message);
+                    (log ?? delegate { })("COMMAND_ITEM_SAFETY", "mode=Repair status=Failed error=" + ex.GetType().Name);
                 }
             }
             return new RepairBatchResult(results);

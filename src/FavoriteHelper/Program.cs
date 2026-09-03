@@ -38,7 +38,7 @@ namespace FavoriteHelper
                 }
                 catch (Exception ex)
                 {
-                    try { Log.Write("COMMAND_FATAL", ex.GetType().Name + ": " + ex.Message); } catch { }
+                    try { Log.Write("COMMAND_FATAL", Log.ErrorCategory(ex)); } catch { }
                     return CommandLine.InfrastructureFailureExitCode;
                 }
                 finally { try { Log.Close(); } catch { } }
@@ -54,11 +54,11 @@ namespace FavoriteHelper
                 try { config = AppConfig.Load(Path.Combine(baseDirectory, "config.json"), out warning); }
                 catch (Exception ex) { config = AppConfig.Defaults(); warning = "Config could not be created; safe defaults loaded: " + ex.Message; }
                 Log.Write("SINGLE_INSTANCE_ACQUIRED", "resident instance owns lock");
-                Log.Write("START", "FavoriteHelper v" + ReleaseVersion.ProductVersion + " Round 3; base=[" + baseDirectory + "] hotkeys=" + config.Open.Text + "," + config.Favorite.Text + "," + config.Unfavorite.Text);
+                Log.Write("START", "FavoriteHelper v" + ReleaseVersion.ProductVersion + " Round 3; hotkeys=" + config.Open.Text + "," + config.Favorite.Text + "," + config.Unfavorite.Text);
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
                 tray = new TrayContext(RequestExit, CurrentFavoriteFolderName, SaveFavoriteFolderName);
-                if (warning != null) { Log.Write("CONFIG_REJECTED", warning); tray.Notify(warning, true, config.EnableNotification); }
+                if (warning != null) { Log.Write("CONFIG_REJECTED", "safe defaults loaded"); tray.Notify(warning, true, config.EnableNotification); }
                 accepting = true;
                 Thread worker = new Thread(Worker) { IsBackground = false, Name = "FavoriteHelper Worker" }; worker.SetApartmentState(ApartmentState.STA); worker.Start();
                 Application.Run(tray);
@@ -81,10 +81,10 @@ namespace FavoriteHelper
                 AppConfig updated = config.WithFavoriteFolderName(value);
                 updated.Save(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config.json"));
                 config = updated;
-                Log.Write("CONFIG_SAVED", "favorite_folder_name=[" + value + "]");
+                Log.Write("CONFIG_SAVED", "configuration updated");
                 return null;
             }
-            catch (Exception ex) { Log.Write("CONFIG_SAVE_FAILED", ex.GetType().Name + ": " + ex.Message); return "Configuration was not saved: " + ex.Message; }
+            catch (Exception ex) { Log.Write("CONFIG_SAVE_FAILED", Log.ErrorCategory(ex)); return "Configuration was not saved: " + ex.Message; }
         }
 
         private static void Worker()
@@ -120,7 +120,7 @@ namespace FavoriteHelper
                 // A mutation already executing reaches here only after Execute returned.
                 FavoriteResult accepted; while ((accepted = operations.ExecuteNext()) != null) ReportOperation(accepted);
             }
-            catch (Exception ex) { Log.Write("WORKER_FATAL", ex.ToString()); tray.Notify("FavoriteHelper stopped safely: " + ex.Message, true, config.EnableNotification); }
+            catch (Exception ex) { Log.Write("WORKER_FATAL", Log.ErrorCategory(ex)); tray.Notify("FavoriteHelper stopped safely: " + ex.Message, true, config.EnableNotification); }
             finally
             {
                 sessions.Clear("application exit"); Observations.Clear();
@@ -135,7 +135,7 @@ namespace FavoriteHelper
         {
             if (kind != ForegroundKind.Photos) return;
             uint pid = WindowClassifier.PhotosPid(foreground); string basename = photos.ReadBasename(foreground);
-            if (sessions.Pending != null && sessions.TryBind(pid, basename, now)) { Log.Write("SESSION_BOUND", "PhotosPid=" + pid + " basename=[" + basename + "]"); tray.Notify("Source session connected", false, config.EnableNotification); }
+            if (sessions.Pending != null && sessions.TryBind(pid, basename, now)) { Log.Write("SESSION_BOUND", "PhotosPid=" + pid); tray.Notify("Source session connected", false, config.EnableNotification); }
             if (sessions.Bound == null || sessions.Bound.PhotosProcessId != pid) return;
             ResolveResult resolved = sessions.ResolveCurrent(pid, basename, now);
             if (resolved.Status != ResolveStatus.Resolved) return;
@@ -155,23 +155,23 @@ namespace FavoriteHelper
                 SourceItem selected; SourceSnapshot snapshot; string error;
                 if (!explorer.TryCaptureAndOpen(action.Hwnd, out selected, out snapshot, out error)) { Safety("OPEN_REJECTED", error); return; }
                 PendingSession pending = sessions.CreatePending(selected, snapshot, now);
-                Log.Write("PENDING_CREATED", "id=" + pending.Id + " selected=[" + selected.FullPath + "] items=" + snapshot.Items.Count); return;
+                Log.Write("PENDING_CREATED", "id=" + pending.Id + " items=" + snapshot.Items.Count); return;
             }
             if (actual != ForegroundKind.Photos) return;
             uint pid = WindowClassifier.PhotosPid(action.Hwnd); SourceItem observed;
             if (action.ObservationVersion == 0 || !Observations.TryGetValue(action.ObservationVersion, out observed) || sessions.Bound == null || sessions.Bound.PhotosProcessId != pid || !BelongsToBoundSnapshot(sessions.Bound, observed)) { Safety("FAVORITE_REJECTED", "No trigger-consistent source observation"); return; }
             FavoriteAction requested = action.Kind == InputActionKind.Favorite ? FavoriteAction.Favorite : FavoriteAction.Unfavorite;
             if (!operations.Enqueue(new FavoriteOperationRequest(requested, observed))) { Safety("OPERATION_REJECTED", "Application is exiting"); return; }
-            Log.Write(requested == FavoriteAction.Favorite ? "FAVORITE_ACCEPTED" : "UNFAVORITE_ACCEPTED", "path=[" + observed.FullPath + "] identity=" + observed.Identity + " observation=" + action.ObservationVersion);
+            Log.Write(requested == FavoriteAction.Favorite ? "FAVORITE_ACCEPTED" : "UNFAVORITE_ACCEPTED", "observation=" + action.ObservationVersion);
         }
 
         private static void ReportOperation(FavoriteResult result)
         {
-            Log.Write("FAVORITE_OPERATION", result.Message + " state=" + result.State + " changed=" + result.Changed);
+            Log.Write("FAVORITE_OPERATION", "state=" + result.State + " changed=" + result.Changed);
             bool safety = NotificationPolicy.IsSafety(result);
             tray.Notify(result.Message, safety, config.EnableNotification);
         }
-        private static void Safety(string kind, string message) { Log.Write(kind, message); tray.Notify(message, true, config.EnableNotification); }
+        private static void Safety(string kind, string message) { Log.Write(kind, "safety rejection"); tray.Notify(message, true, config.EnableNotification); }
         private static bool BelongsToBoundSnapshot(BoundSession bound, SourceItem item) { foreach (SourceItem candidate in bound.Snapshot.Items) if (Object.ReferenceEquals(candidate, item)) return true; return false; }
     }
 }

@@ -29,6 +29,10 @@ namespace FavoriteHelper
             string line = String.Format("{0:o} {1} {2}", DateTime.Now, kind, detail);
             if (!Lines.IsAddingCompleted) Lines.TryAdd(line);
         }
+        public static string ErrorCategory(Exception exception)
+        {
+            return "error=" + (exception == null ? "Unknown" : exception.GetType().Name);
+        }
         private static void WriteLoop()
         {
             foreach (string line in Lines.GetConsumingEnumerable())

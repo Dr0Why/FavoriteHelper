@@ -72,6 +72,20 @@ internal static class ExportTests
         Check(CreateJunction(ExportDirectory(reparseLink), outside), "export reparse test junction created");
         Check(Service().Export(new[] { reparseLink }).RejectedCount == 1 && Directory.GetFiles(outside).Length == 0, "output directory reparse point rejected without redirected write");
 
+        string directoryRaceSource, directoryRaceLink; Pair(root, "directory-race", "Pinned.jpg", new byte[] { 22, 23 }, out directoryRaceSource, out directoryRaceLink);
+        Snapshot directoryRaceSourceBefore = Snapshot.Take(directoryRaceSource), directoryRaceLinkBefore = Snapshot.Take(directoryRaceLink);
+        string legitimateOutput = ExportDirectory(directoryRaceLink), displacedOutput = legitimateOutput + ".displaced", redirectedOutput = Path.Combine(root, "directory-race-outside");
+        Directory.CreateDirectory(legitimateOutput); Directory.CreateDirectory(redirectedOutput);
+        ExportService directoryRaced = Service();
+        directoryRaced.BeforeDestinationCreate = delegate
+        {
+            Directory.Move(legitimateOutput, displacedOutput);
+            if (!CreateJunction(legitimateOutput, redirectedOutput)) throw new Exception("race junction creation failed");
+        };
+        ExportBatchResult directoryRace = directoryRaced.Export(new[] { directoryRaceLink });
+        Check(directoryRace.FailedCount == 1 && directoryRace.Items[0].Reason.Contains("changed during destination creation") && !File.Exists(Path.Combine(redirectedOutput, "Pinned.jpg")) && !File.Exists(Path.Combine(displacedOutput, "Pinned.jpg")), "handle-relative create detects directory replacement without redirected or hidden write");
+        Check(directoryRaceSourceBefore.Same(directoryRaceSource) && directoryRaceLinkBefore.Same(directoryRaceLink), "directory replacement race leaves source and shortcut unchanged");
+
         string independentSource, independentLink; Pair(root, "independent", "Good.jpg", new byte[] { 18 }, out independentSource, out independentLink);
         ExportBatchResult independent = Service().Export(new[] { malformedLink, independentLink });
         Check(independent.RejectedCount == 1 && independent.ExportedCount == 1 && File.Exists(Output(independentLink, "Good.jpg")), "rejected item does not stop unrelated export");
@@ -95,7 +109,7 @@ internal static class ExportTests
     private static string ExportDirectory(string link) { return Path.Combine(Path.GetDirectoryName(link), ExportService.ExportDirectoryName); }
     private static string Output(string link, string name) { return Path.Combine(ExportDirectory(link), name); }
     private static bool CreateJunction(string link, string target)
-    { Process p = Process.Start(new ProcessStartInfo("cmd.exe", "/c mklink /J \"" + link + "\" \"" + target + "\"") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true }); p.WaitForExit(); return p.ExitCode == 0 && Directory.Exists(link) && (File.GetAttributes(link) & FileAttributes.ReparsePoint) != 0; }
+    { Process p = Process.Start(new ProcessStartInfo("cmd.exe", "/d /c mklink /J \"" + link + "\" \"" + target + "\"") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true }); p.WaitForExit(); return p.ExitCode == 0 && Directory.Exists(link) && (File.GetAttributes(link) & FileAttributes.ReparsePoint) != 0; }
     private static bool Same(string a, string b) { return String.Equals(Path.GetFullPath(a), Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase); }
     private static byte[] Hash(string path) { using (SHA256 sha = SHA256.Create()) using (FileStream stream = File.OpenRead(path)) return sha.ComputeHash(stream); }
     private static bool Equal(byte[] a, byte[] b) { if (a.Length != b.Length) return false; for (int i = 0; i < a.Length; i++) if (a[i] != b[i]) return false; return true; }

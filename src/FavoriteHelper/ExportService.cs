@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using Microsoft.Win32.SafeHandles;
 
 namespace FavoriteHelper
 {
@@ -53,6 +56,7 @@ namespace FavoriteHelper
         private readonly IShortcutStore shortcuts;
         private readonly Func<string> favoriteFolderName;
         internal Action BeforeWrite;
+        internal Action BeforeDestinationCreate;
 
         public ExportService(IFileValidator files, IShortcutStore shortcuts) : this(files, shortcuts, delegate { return FavoriteService.FavoritesDirectoryName; }) { }
         public ExportService(IFileValidator files, IShortcutStore shortcuts, Func<string> favoriteFolderName)
@@ -164,19 +168,43 @@ namespace FavoriteHelper
                     if (!targetIdentity.Equals(files.Read(target)))
                         return Result(shortcut, target, destination, ExportStatus.Failed, "source target disappeared or changed identity");
 
-                    FileIdentity currentOutputIdentity;
-                    if (!TrySafeDirectory(outputDirectory, out currentOutputIdentity) || !outputDirectoryIdentity.Equals(currentOutputIdentity))
-                        return Result(shortcut, target, destination, ExportStatus.Failed, "export directory changed before write");
-
-                    FileStream output;
-                    try { output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None); }
-                    catch (IOException ex)
+                    using (AnchoredExportDirectory anchored = AnchoredExportDirectory.Open(outputDirectory, outputDirectoryIdentity))
                     {
-                        if (File.Exists(destination) || Directory.Exists(destination))
+                        if (anchored == null)
+                            return Result(shortcut, target, destination, ExportStatus.Failed, "export directory changed before write");
+                        if (!outputDirectoryIdentity.Equals(files.Read(outputDirectory)))
+                            return Result(shortcut, target, destination, ExportStatus.Failed, "export directory changed before destination creation");
+
+                        AnchoredOutput output;
+                        try { output = anchored.CreateNew(Path.GetFileName(target), BeforeDestinationCreate); }
+                        catch (DestinationExistsException)
+                        {
                             return Result(shortcut, target, destination, ExportStatus.SkippedAlreadyExists, "destination already exists");
-                        return Result(shortcut, target, destination, ExportStatus.Failed, "destination could not be created: " + ex.Message);
+                        }
+                        catch (Exception ex)
+                        {
+                            return Result(shortcut, target, destination, ExportStatus.Failed, "destination could not be created: " + ex.Message);
+                        }
+
+                        using (output)
+                        {
+                            bool complete = false;
+                            try
+                            {
+                                if (!outputDirectoryIdentity.Equals(files.Read(outputDirectory)))
+                                    return Result(shortcut, target, destination, ExportStatus.Failed, "export directory changed during destination creation");
+                                source.CopyTo(output.Stream);
+                                output.Stream.Flush(true);
+                                if (!outputDirectoryIdentity.Equals(files.Read(outputDirectory)))
+                                    return Result(shortcut, target, destination, ExportStatus.Failed, "export directory changed during write");
+                                complete = true;
+                            }
+                            finally
+                            {
+                                if (!complete) output.DeleteOnClose();
+                            }
+                        }
                     }
-                    using (output) source.CopyTo(output);
                 }
                 return Result(shortcut, target, destination, ExportStatus.Exported, "file exported");
             }
@@ -209,5 +237,148 @@ namespace FavoriteHelper
         private static byte[] SafeHash(string path) { try { return Hash(path); } catch { return null; } }
         private static bool Equal(byte[] a, byte[] b)
         { if (a == null || b == null || a.Length != b.Length) return false; int d = 0; for (int i = 0; i < a.Length; i++) d |= a[i] ^ b[i]; return d == 0; }
+    }
+
+    internal sealed class DestinationExistsException : IOException { }
+
+    // Keeps the validated directory object open and creates only a single child name
+    // relative to that handle. A later pathname replacement therefore cannot redirect
+    // the create through a junction or symbolic link.
+    internal sealed class AnchoredExportDirectory : IDisposable
+    {
+        private const uint FileReadAttributes = 0x00000080;
+        private const uint GenericWrite = 0x40000000;
+        private const uint DeleteAccess = 0x00010000;
+        private const uint Synchronize = 0x00100000;
+        private const uint OpenExisting = 3;
+        private const uint FileCreate = 2;
+        private const uint FileAttributeNormal = 0x00000080;
+        private const uint FileFlagBackupSemantics = 0x02000000;
+        private const uint FileFlagOpenReparsePoint = 0x00200000;
+        private const uint FileNonDirectoryFile = 0x00000040;
+        private const uint FileSynchronousIoNonAlert = 0x00000020;
+        private const uint StatusObjectNameCollision = 0xC0000035;
+        private static readonly IntPtr InvalidHandle = new IntPtr(-1);
+        private readonly SafeFileHandle directory;
+
+        private AnchoredExportDirectory(SafeFileHandle directory) { this.directory = directory; }
+
+        internal static AnchoredExportDirectory Open(string path, FileIdentity expected)
+        {
+            IntPtr raw = CreateFile(path, FileReadAttributes | Synchronize, 7, IntPtr.Zero, OpenExisting,
+                FileFlagBackupSemantics | FileFlagOpenReparsePoint, IntPtr.Zero);
+            if (raw == InvalidHandle) return null;
+            SafeFileHandle handle = new SafeFileHandle(raw, true);
+            ByHandleFileInformation info;
+            if (!GetFileInformationByHandle(handle, out info) ||
+                (info.Attributes & (uint)FileAttributes.Directory) == 0 ||
+                (info.Attributes & (uint)FileAttributes.ReparsePoint) != 0 ||
+                expected == null || expected.VolumeSerial != info.VolumeSerial ||
+                expected.FileIndex != (((ulong)info.IndexHigh << 32) | info.IndexLow))
+            {
+                handle.Dispose();
+                return null;
+            }
+            return new AnchoredExportDirectory(handle);
+        }
+
+        internal AnchoredOutput CreateNew(string name, Action beforeNativeCreate)
+        {
+            if (String.IsNullOrEmpty(name) || !String.Equals(name, Path.GetFileName(name), StringComparison.Ordinal) ||
+                name == "." || name == "..") throw new IOException("destination filename is invalid");
+
+            IntPtr text = Marshal.StringToHGlobalUni(name);
+            try
+            {
+                UnicodeString unicode = new UnicodeString
+                {
+                    Length = checked((ushort)(name.Length * 2)),
+                    MaximumLength = checked((ushort)((name.Length + 1) * 2)),
+                    Buffer = text
+                };
+                IntPtr unicodePointer = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(UnicodeString)));
+                try
+                {
+                    Marshal.StructureToPtr(unicode, unicodePointer, false);
+                    ObjectAttributes attributes = new ObjectAttributes
+                    {
+                        Length = Marshal.SizeOf(typeof(ObjectAttributes)),
+                        RootDirectory = directory.DangerousGetHandle(),
+                        ObjectName = unicodePointer,
+                        Attributes = 0x00000040
+                    };
+                    IoStatusBlock statusBlock;
+                    IntPtr raw;
+                    if (beforeNativeCreate != null) beforeNativeCreate();
+                    uint status = NtCreateFile(out raw, GenericWrite | DeleteAccess | FileReadAttributes | Synchronize, ref attributes,
+                        out statusBlock, IntPtr.Zero, FileAttributeNormal, 0, FileCreate,
+                        FileNonDirectoryFile | FileSynchronousIoNonAlert | FileFlagOpenReparsePoint, IntPtr.Zero, 0);
+                    if (status == StatusObjectNameCollision) throw new DestinationExistsException();
+                    if ((status & 0x80000000) != 0)
+                        throw new IOException(new Win32Exception((int)RtlNtStatusToDosError(status)).Message);
+
+                    SafeFileHandle handle = new SafeFileHandle(raw, true);
+                    ByHandleFileInformation info;
+                    if (!GetFileInformationByHandle(handle, out info) ||
+                        (info.Attributes & ((uint)FileAttributes.Directory | (uint)FileAttributes.ReparsePoint)) != 0)
+                    {
+                        AnchoredOutput unsafeOutput = new AnchoredOutput(handle);
+                        unsafeOutput.DeleteOnClose();
+                        unsafeOutput.Dispose();
+                        throw new IOException("created destination is not a regular non-reparse file");
+                    }
+                    return new AnchoredOutput(handle);
+                }
+                finally { Marshal.FreeHGlobal(unicodePointer); }
+            }
+            finally { Marshal.FreeHGlobal(text); }
+        }
+
+        public void Dispose() { directory.Dispose(); }
+
+        [StructLayout(LayoutKind.Sequential)] private struct FileTime { public uint Low, High; }
+        [StructLayout(LayoutKind.Sequential)] private struct ByHandleFileInformation
+        {
+            public uint Attributes; public FileTime Creation, Access, Write;
+            public uint VolumeSerial, SizeHigh, SizeLow, Links, IndexHigh, IndexLow;
+        }
+        [StructLayout(LayoutKind.Sequential)] private struct UnicodeString
+        { public ushort Length, MaximumLength; public IntPtr Buffer; }
+        [StructLayout(LayoutKind.Sequential)] private struct ObjectAttributes
+        { public int Length; public IntPtr RootDirectory, ObjectName; public uint Attributes; public IntPtr SecurityDescriptor, SecurityQualityOfService; }
+        [StructLayout(LayoutKind.Sequential)] private struct IoStatusBlock
+        { public IntPtr Status; public UIntPtr Information; }
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr CreateFile(string name, uint access, uint share, IntPtr security, uint creation, uint flags, IntPtr template);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool GetFileInformationByHandle(SafeFileHandle handle, out ByHandleFileInformation info);
+        [DllImport("ntdll.dll")]
+        private static extern uint NtCreateFile(out IntPtr handle, uint access, ref ObjectAttributes attributes,
+            out IoStatusBlock status, IntPtr allocationSize, uint fileAttributes, uint shareAccess,
+            uint createDisposition, uint createOptions, IntPtr eaBuffer, uint eaLength);
+        [DllImport("ntdll.dll")]
+        private static extern uint RtlNtStatusToDosError(uint status);
+    }
+
+    internal sealed class AnchoredOutput : IDisposable
+    {
+        private readonly SafeFileHandle handle;
+        internal readonly FileStream Stream;
+        internal AnchoredOutput(SafeFileHandle handle)
+        {
+            this.handle = handle;
+            Stream = new FileStream(handle, FileAccess.Write, 4096, false);
+        }
+        internal void DeleteOnClose()
+        {
+            FileDisposition disposition = new FileDisposition { DeleteFile = true };
+            SetFileInformationByHandle(handle, 4, ref disposition, (uint)Marshal.SizeOf(typeof(FileDisposition)));
+        }
+        public void Dispose() { Stream.Dispose(); }
+        [StructLayout(LayoutKind.Sequential)] private struct FileDisposition
+        { [MarshalAs(UnmanagedType.Bool)] public bool DeleteFile; }
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool SetFileInformationByHandle(SafeFileHandle handle, int infoClass, ref FileDisposition info, uint size);
     }
 }

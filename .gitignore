@@ -14,6 +14,12 @@ TestResults/
 *.trx
 *smoke*.png
 *screenshot*.png
+test_image/
+
+# Retired/manual compatibility evidence (not release source)
+spikes/
+src/FavoriteHelper/ExplorerIntegration.cs
+tests/ExplorerProbeSetup.cs
 
 # Local SDK and package caches
 .dotnet/

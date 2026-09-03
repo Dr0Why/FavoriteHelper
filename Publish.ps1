@@ -17,5 +17,5 @@ $dotnet = if (Test-Path -LiteralPath $localDotnet) { $localDotnet } else { 'dotn
 if ($LASTEXITCODE) { throw 'Self-contained publish failed' }
 Copy-Item -LiteralPath (Join-Path $root 'config.json') -Destination $output -Force
 Copy-Item -LiteralPath (Join-Path $root 'README.md') -Destination $output -Force
-Copy-Item -LiteralPath (Join-Path $root 'RELEASE_NOTES-v6.1.0.md') -Destination (Join-Path $output 'RELEASE_NOTES.md') -Force
+Copy-Item -LiteralPath (Join-Path $root 'RELEASE_NOTES-v6.3.0.md') -Destination (Join-Path $output 'RELEASE_NOTES.md') -Force
 Write-Host "Published self-contained win-x64 Portable output: $output"

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using FavoriteHelper;
 
 internal static class CommandLineTests
@@ -51,6 +52,24 @@ internal static class CommandLineTests
         }, null);
         Check(caught.FailedCount == 1 && caught.RepairedCount == 1 && thrownCalls == 2, "per-item repair exception fails safely and processing continues");
         Check(CommandLine.Execute(export, delegate(IEnumerable<string> paths) { throw new InvalidOperationException("infrastructure"); }, NoRepair, null) == 3, "command infrastructure exception returns fatal nonzero");
+
+        const string privatePath = @"C:\Users\ExampleUser\Pictures\Private\secret-image.jpg";
+        const string unicodePath = @"C:\Users\ExampleUser\Pictures\私人\秘密照片.jpg";
+        const string customFolder = "我的私人收藏";
+        List<string> productionLog = new List<string>();
+        Action<string, string> capture = delegate(string kind, string detail) { productionLog.Add(kind + " " + detail); };
+        CommandLine.Repair(new[] { "private.lnk", "unicode.lnk" }, delegate(string path)
+        {
+            if (path == "private.lnk") return new ShortcutMigrationResult(ShortcutMigrationStatus.Failed, "failed at " + privatePath + " in " + customFolder);
+            throw new InvalidOperationException("failed at " + unicodePath);
+        }, capture);
+        CommandLine.Execute(export, delegate(IEnumerable<string> paths) { throw new IOException("failed at " + privatePath); }, NoRepair, capture);
+        string captured = String.Join("\n", productionLog.ToArray());
+        Check(!captured.Contains(privatePath) && !captured.Contains("ExampleUser") && !captured.Contains("secret-image.jpg") &&
+            !captured.Contains(unicodePath) && !captured.Contains("私人") && !captured.Contains("秘密照片.jpg") && !captured.Contains(customFolder),
+            "command production logs exclude paths, filenames, user names, Unicode filesystem names, custom folder names, and exception messages");
+        Check(captured.Contains("COMMAND_ITEM_SAFETY mode=Repair status=Failed") && captured.Contains("COMMAND_FATAL error=IOException"),
+            "command safety status and exception category remain logged");
         Check(CommandLine.Execute(CommandLine.Parse(new[] { "--bad" }), NoExport, NoRepair, null) == 2, "invalid invocation maps to exit code two");
 
         Console.WriteLine("COMMAND LINE ALL PASS (" + passed + ")");
