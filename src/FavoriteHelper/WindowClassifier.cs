@@ -7,6 +7,12 @@ namespace FavoriteHelper
 
     internal static class WindowClassifier
     {
+        internal static bool IsPhotosProcessName(string processName)
+        {
+            return String.Equals(processName, "PhotosApp", StringComparison.OrdinalIgnoreCase)
+                || String.Equals(processName, "Photos", StringComparison.OrdinalIgnoreCase);
+        }
+
         internal static string ProcessName(IntPtr hwnd)
         {
             if (hwnd == IntPtr.Zero) return String.Empty;
@@ -22,13 +28,13 @@ namespace FavoriteHelper
             if (hwnd == IntPtr.Zero) return 0;
             uint direct;
             NativeMethods.GetWindowThreadProcessId(hwnd, out direct);
-            if (String.Equals(ProcessName(hwnd), "PhotosApp", StringComparison.OrdinalIgnoreCase)) return direct;
+            if (IsPhotosProcessName(ProcessName(hwnd))) return direct;
             uint found = 0;
             NativeMethods.EnumChildWindows(hwnd, delegate(IntPtr child, IntPtr data)
             {
                 uint pid;
                 NativeMethods.GetWindowThreadProcessId(child, out pid);
-                if (String.Equals(ProcessName(child), "PhotosApp", StringComparison.OrdinalIgnoreCase)) { found = pid; return false; }
+                if (IsPhotosProcessName(ProcessName(child))) { found = pid; return false; }
                 return true;
             }, IntPtr.Zero);
             return found;

@@ -36,7 +36,12 @@ namespace FavoriteHelper
         string ReadRelativePath(string shortcut);
     }
 
-    internal sealed class ShellShortcutStore : IShortcutStore
+    internal interface IMigrationShortcutStore : IShortcutStore
+    {
+        string ReadStoredTargetPath(string shortcut);
+    }
+
+    internal sealed class ShellShortcutStore : IMigrationShortcutStore
     {
         public void Create(string target, string shortcut)
         {
@@ -74,20 +79,35 @@ namespace FavoriteHelper
             }
             return null;
         }
+
+        public string ReadStoredTargetPath(string shortcut)
+        {
+            object value = new ShellLinkObject();
+            try
+            {
+                ((IPersistFile)value).Load(shortcut, 0);
+                StringBuilder path = new StringBuilder(32768);
+                ((IShellLinkW)value).GetPath(path, path.Capacity, IntPtr.Zero, 4); // SLGP_RAWPATH; never resolve/search.
+                return path.ToString();
+            }
+            finally { Marshal.FinalReleaseComObject(value); }
+        }
         private static void Need(byte[] bytes, int offset, int count) { if (offset < 0 || count < 0 || offset > bytes.Length - count) throw new InvalidDataException("Truncated Shell Link"); }
     }
 
     internal sealed class FavoriteService
     {
-        internal const string FavoritesDirectoryName = "收藏";
+        internal const string FavoritesDirectoryName = "Favorite";
         private readonly IFileValidator files;
         private readonly IShortcutStore shortcuts;
+        private readonly Func<string> favoriteFolderName;
         internal Action BeforeCommit;
         internal Action BeforeDelete;
         internal Action BeforeDirectoryRevalidation;
 
-        public FavoriteService(IFileValidator files, IShortcutStore shortcuts) { this.files = files; this.shortcuts = shortcuts; }
-        public string DirectoryPath(SourceItem item) { return Path.Combine(Path.GetDirectoryName(item.FullPath), FavoritesDirectoryName); }
+        public FavoriteService(IFileValidator files, IShortcutStore shortcuts) : this(files, shortcuts, delegate { return FavoritesDirectoryName; }) { }
+        public FavoriteService(IFileValidator files, IShortcutStore shortcuts, Func<string> favoriteFolderName) { this.files = files; this.shortcuts = shortcuts; this.favoriteFolderName = favoriteFolderName; }
+        public string DirectoryPath(SourceItem item) { return Path.Combine(Path.GetDirectoryName(item.FullPath), favoriteFolderName()); }
         public string ShortcutPath(SourceItem item) { return Path.Combine(DirectoryPath(item), item.Basename + ".lnk"); }
 
         public FavoriteState Classify(SourceItem item)

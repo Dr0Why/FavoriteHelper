@@ -17,12 +17,37 @@ namespace FavoriteHelper
         private static TrayContext tray;
         private static AppConfig config;
         [STAThread]
-        private static void Main(string[] args)
+        private static int Main(string[] args)
         {
+            CommandRequest command = CommandLine.Parse(args);
+            if (command.Mode != LaunchMode.Resident)
+            {
+                if (command.Mode == LaunchMode.Invalid) return CommandLine.InvalidInvocationExitCode;
+                string commandBase = AppDomain.CurrentDomain.BaseDirectory;
+                try
+                {
+                    Log.Initialize(Path.Combine(commandBase, "logs", "app.log"));
+                    string commandWarning;
+                    AppConfig commandConfig = AppConfig.Load(Path.Combine(commandBase, "config.json"), out commandWarning);
+                    Func<string> commandFolder = delegate { return commandConfig.FavoriteFolderName; };
+                    WindowsFileValidator commandFiles = new WindowsFileValidator();
+                    ShellShortcutStore commandShortcuts = new ShellShortcutStore();
+                    ExportService exporter = new ExportService(commandFiles, commandShortcuts, commandFolder);
+                    ShortcutMigrationService migration = new ShortcutMigrationService(commandFiles, commandShortcuts, commandFolder);
+                    return CommandLine.Execute(command, exporter.Export, migration.Migrate, Log.Write);
+                }
+                catch (Exception ex)
+                {
+                    try { Log.Write("COMMAND_FATAL", ex.GetType().Name + ": " + ex.Message); } catch { }
+                    return CommandLine.InfrastructureFailureExitCode;
+                }
+                finally { try { Log.Close(); } catch { } }
+            }
+
             bool ownsMutex;
             using (Mutex singleInstance = new Mutex(true, "Local\\FavoriteHelper-v6.1", out ownsMutex))
             {
-                if (!ownsMutex) return;
+                if (!ownsMutex) return 0;
                 string baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
                 Log.Initialize(Path.Combine(baseDirectory, "logs", "app.log"));
                 string warning;
@@ -32,7 +57,7 @@ namespace FavoriteHelper
                 Log.Write("START", "FavoriteHelper v6.1 Round 3; base=[" + baseDirectory + "] hotkeys=" + config.Open.Text + "," + config.Favorite.Text + "," + config.Unfavorite.Text);
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
-                tray = new TrayContext(RequestExit);
+                tray = new TrayContext(RequestExit, CurrentFavoriteFolderName, SaveFavoriteFolderName);
                 if (warning != null) { Log.Write("CONFIG_REJECTED", warning); tray.Notify(warning, true, config.EnableNotification); }
                 accepting = true;
                 Thread worker = new Thread(Worker) { IsBackground = false, Name = "FavoriteHelper Worker" }; worker.SetApartmentState(ApartmentState.STA); worker.Start();
@@ -41,9 +66,26 @@ namespace FavoriteHelper
                 Log.Write("SINGLE_INSTANCE_RELEASED", "clean exit");
                 Log.Close();
             }
+            return 0;
         }
 
         private static void RequestExit() { accepting = false; stopping = true; Wake.Set(); Log.Write("EXIT_REQUESTED", "stopping new operations and draining accepted work"); }
+
+        private static string CurrentFavoriteFolderName() { return config.FavoriteFolderName; }
+        private static string SaveFavoriteFolderName(string value)
+        {
+            string error;
+            if (!AppConfig.TryValidateFavoriteFolderName(value, out error)) return error;
+            try
+            {
+                AppConfig updated = config.WithFavoriteFolderName(value);
+                updated.Save(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config.json"));
+                config = updated;
+                Log.Write("CONFIG_SAVED", "favorite_folder_name=[" + value + "]");
+                return null;
+            }
+            catch (Exception ex) { Log.Write("CONFIG_SAVE_FAILED", ex.GetType().Name + ": " + ex.Message); return "Configuration was not saved: " + ex.Message; }
+        }
 
         private static void Worker()
         {
@@ -51,7 +93,7 @@ namespace FavoriteHelper
             SessionManager sessions = new SessionManager(files);
             ExplorerSource explorer = new ExplorerSource(files);
             PhotosReader photos = new PhotosReader();
-            FavoriteOperationQueue operations = new FavoriteOperationQueue(new FavoriteService(files, new ShellShortcutStore()));
+            FavoriteOperationQueue operations = new FavoriteOperationQueue(new FavoriteService(files, new ShellShortcutStore(), CurrentFavoriteFolderName));
             try
             {
                 using (KeyboardInput keyboard = new KeyboardInput(EnqueueAction, config))

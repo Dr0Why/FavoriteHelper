@@ -9,5 +9,6 @@
   </PropertyGroup>
   <ItemGroup>
     <Content Include="Assets\FavoriteHelper.ico" CopyToOutputDirectory="PreserveNewest" />
+    <Compile Remove="ExplorerIntegration.cs" />
   </ItemGroup>
 </Project>

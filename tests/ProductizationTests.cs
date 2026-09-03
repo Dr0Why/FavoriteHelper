@@ -13,6 +13,7 @@ internal static class ProductizationTests
         {
             string path = Path.Combine(root, "config.json"), warning; AppConfig defaults = AppConfig.Load(path, out warning);
             Check(defaults.Open.Text == "Ctrl+Shift+P" && defaults.Favorite.Text == "Ctrl+F" && defaults.Unfavorite.Text == "Ctrl+Shift+U", "default P/F/U hotkeys");
+            Check(defaults.FavoriteFolderName == "Favorite", "missing favorite_folder_name defaults to Favorite");
             Check(File.Exists(path) && warning == null, "missing config created app-locally");
             File.WriteAllText(path, "{bad json"); AppConfig malformed = AppConfig.Load(path, out warning);
             Check(warning != null && malformed.Open.Text == "Ctrl+Shift+P", "malformed config fails to safe defaults");
@@ -20,6 +21,16 @@ internal static class ProductizationTests
             AppConfig unsafeValue = AppConfig.Load(path, out warning); Check(warning != null && unsafeValue.EnableNotification, "unsafe hotkey rejected as a unit");
             File.WriteAllText(path, "{\"open_hotkey\":\"Ctrl+Shift+P\",\"favorite_hotkey\":\"Ctrl+F\",\"unfavorite_hotkey\":\"Ctrl+Shift+U\",\"enable_notification\":false}");
             AppConfig quiet = AppConfig.Load(path, out warning); Check(warning == null && !quiet.EnableNotification, "valid notification suppression is honored");
+            File.WriteAllText(path, "{\"open_hotkey\":\"Ctrl+Shift+P\",\"favorite_hotkey\":\"Ctrl+F\",\"unfavorite_hotkey\":\"Ctrl+Shift+U\",\"enable_notification\":false,\"favorite_folder_name\":\"收藏\"}");
+            AppConfig unicode = AppConfig.Load(path, out warning); Check(warning == null && unicode.FavoriteFolderName == "收藏", "legal Unicode favorite folder name loads");
+            string[] invalid = { "", "   ", ".", "..", "a/b", "a\\b", "a<b", "a>", "a:b", "a\"b", "a|b", "a?b", "a*b", "tail ", "tail.", "CON", "prn.txt", "AUX.foo", "NUL", "COM1", "com9.ext", "LPT1", "lpt9.txt", "COM¹", "LPT³.txt" };
+            foreach (string candidate in invalid) { string invalidError; Check(!AppConfig.TryValidateFavoriteFolderName(candidate, out invalidError), "invalid folder name rejected: [" + candidate + "]"); }
+            string legalError; Check(AppConfig.TryValidateFavoriteFolderName("お気に入り", out legalError), "legal Japanese folder name accepted");
+            AppConfig saved = unicode.WithFavoriteFolderName("お気に入り"); saved.Save(path); AppConfig reloaded = AppConfig.Load(path, out warning);
+            Check(warning == null && reloaded.FavoriteFolderName == "お気に入り", "valid favorite folder name persists");
+            byte[] priorConfig = File.ReadAllBytes(path); AppConfig.BeforeConfigCommit = delegate { throw new IOException("simulated config commit failure"); };
+            bool saveFailed = false; try { saved.WithFavoriteFolderName("Starred").Save(path); } catch (IOException) { saveFailed = true; } finally { AppConfig.BeforeConfigCommit = null; }
+            AppConfig afterFailure = AppConfig.Load(path, out warning); Check(saveFailed && afterFailure.FavoriteFolderName == "お気に入り" && Equal(priorConfig, File.ReadAllBytes(path)), "failed save retains prior disk configuration and current value");
             Check(!NotificationPolicy.ShouldShow(false, false), "quiet config suppresses routine notifications");
             Check(NotificationPolicy.ShouldShow(false, true), "enabled config shows routine notifications");
             Check(NotificationPolicy.ShouldShow(true, false), "quiet config cannot suppress safety notifications");
@@ -39,10 +50,17 @@ internal static class ProductizationTests
             store.Release.Set(); Check(mutation.Join(10000), "active mutation reaches safe completion point");
             string favoriteDirectory = service.DirectoryPath(item); string[] temporary = Directory.Exists(favoriteDirectory) ? Directory.GetFiles(favoriteDirectory, ".favoritehelper-*.tmp.lnk") : new string[0];
             Check(result != null && result.Changed && temporary.Length == 0, "controlled exit leaves final link or cleanup, never partial final link");
+            string switchImage = Path.Combine(root, "switch.jpg"); File.WriteAllBytes(switchImage, new byte[] { 9 }); SourceItem switchItem = new SourceItem(switchImage, "switch.jpg", files.Read(switchImage)); string currentName = "A";
+            FavoriteService configurable = new FavoriteService(files, new ShellShortcutStore(), delegate { return currentName; });
+            Check(configurable.Execute(new FavoriteOperationRequest(FavoriteAction.Favorite, switchItem)).Changed && Directory.Exists(Path.Combine(root, "A")), "configured A directory is used");
+            currentName = "B"; Check(configurable.Classify(switchItem) == FavoriteState.NotFavorited && configurable.Execute(new FavoriteOperationRequest(FavoriteAction.Favorite, switchItem)).Changed && Directory.Exists(Path.Combine(root, "B")), "A to B ignores A and uses B without migration");
+            currentName = "A"; Check(configurable.Classify(switchItem) == FavoriteState.Favorited, "switching back to A naturally reuses existing A");
         }
         finally { Directory.Delete(root, true); }
         return failures == 0 ? 0 : 1;
     }
+
+    private static bool Equal(byte[] a, byte[] b) { if (a.Length != b.Length) return false; for (int i = 0; i < a.Length; i++) if (a[i] != b[i]) return false; return true; }
 
     private sealed class BlockingStore : IShortcutStore
     {

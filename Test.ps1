@@ -23,3 +23,23 @@ if ($LASTEXITCODE) { throw 'Productization tests failed' }
 if ($LASTEXITCODE) { throw 'Logging tests compilation failed' }
 & "$output\LoggingTests.exe"
 if ($LASTEXITCODE) { throw 'Logging tests failed' }
+$compatibility = @('NativeMethods.cs', 'WindowClassifier.cs') | ForEach-Object { Join-Path $source $_ }
+& $csc /nologo /target:exe /platform:x64 /out:"$output\CompatibilityTests.exe" $compatibility (Join-Path $root 'tests\CompatibilityTests.cs')
+if ($LASTEXITCODE) { throw 'Compatibility tests compilation failed' }
+& "$output\CompatibilityTests.exe"
+if ($LASTEXITCODE) { throw 'Compatibility tests failed' }
+$migration = @('Models.cs', 'FileIdentityReader.cs', 'FavoriteOperations.cs', 'ShellLinkInterop.cs', 'ShortcutMigration.cs') | ForEach-Object { Join-Path $source $_ }
+& $csc /nologo /target:exe /platform:x64 /out:"$output\MigrationTests.exe" $migration (Join-Path $root 'tests\MigrationTests.cs')
+if ($LASTEXITCODE) { throw 'Migration tests compilation failed' }
+& "$output\MigrationTests.exe"
+if ($LASTEXITCODE) { throw 'Migration tests failed' }
+$export = @('Models.cs', 'FileIdentityReader.cs', 'FavoriteOperations.cs', 'ShellLinkInterop.cs', 'ExportService.cs') | ForEach-Object { Join-Path $source $_ }
+& $csc /nologo /target:exe /platform:x64 /out:"$output\ExportTests.exe" $export (Join-Path $root 'tests\ExportTests.cs')
+if ($LASTEXITCODE) { throw 'Export tests compilation failed' }
+& "$output\ExportTests.exe"
+if ($LASTEXITCODE) { throw 'Export tests failed' }
+$command = @('Models.cs', 'FileIdentityReader.cs', 'FavoriteOperations.cs', 'ShellLinkInterop.cs', 'ShortcutMigration.cs', 'ExportService.cs', 'CommandLine.cs') | ForEach-Object { Join-Path $source $_ }
+& $csc /nologo /target:exe /platform:x64 /out:"$output\CommandLineTests.exe" $command (Join-Path $root 'tests\CommandLineTests.cs')
+if ($LASTEXITCODE) { throw 'Command-line tests compilation failed' }
+& "$output\CommandLineTests.exe"
+if ($LASTEXITCODE) { throw 'Command-line tests failed' }

@@ -2,5 +2,6 @@
   "open_hotkey": "Ctrl+Shift+P",
   "favorite_hotkey": "Ctrl+F",
   "unfavorite_hotkey": "Ctrl+Shift+U",
-  "enable_notification": true
+  "enable_notification": true,
+  "favorite_folder_name": "Favorite"
 }
