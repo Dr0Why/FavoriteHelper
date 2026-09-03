@@ -54,7 +54,7 @@ namespace FavoriteHelper
                 try { config = AppConfig.Load(Path.Combine(baseDirectory, "config.json"), out warning); }
                 catch (Exception ex) { config = AppConfig.Defaults(); warning = "Config could not be created; safe defaults loaded: " + ex.Message; }
                 Log.Write("SINGLE_INSTANCE_ACQUIRED", "resident instance owns lock");
-                Log.Write("START", "FavoriteHelper v6.1 Round 3; base=[" + baseDirectory + "] hotkeys=" + config.Open.Text + "," + config.Favorite.Text + "," + config.Unfavorite.Text);
+                Log.Write("START", "FavoriteHelper v" + ReleaseVersion.ProductVersion + " Round 3; base=[" + baseDirectory + "] hotkeys=" + config.Open.Text + "," + config.Favorite.Text + "," + config.Unfavorite.Text);
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
                 tray = new TrayContext(RequestExit, CurrentFavoriteFolderName, SaveFavoriteFolderName);
